@@ -1,0 +1,420 @@
+{
+  "proyecto": {
+    "nombre": "Detector de Palabras",
+    "descripcion": "Sistema de reconocimiento de palabras aisladas en espanol usando MFCC + Cuantizacion Vectorial (VQ-LBG) implementado en MATLAB",
+    "palabras": ["arriba", "abajo", "encender", "apagar", "abrir", "cerrar", "subir", "bajar", "silencio", "alto", "seguir", "parar"],
+    "fecha_inicio": "2026-06-14",
+    "fecha_fin": "2026-06-23"
+  },
+
+  "analisis_inicial": {
+    "descripcion": "El proyecto era un sistema basico de reconocimiento de palabras con MATLAB, basado en un tutorial de reconocimiento de locutores adaptado a palabras. Tenia el codigo base pero los datos de audio estaban desorganizados y el modelo tenia bugs que impedian su funcionamiento.",
+    "archivos_originales": [
+      "main.m - Script principal con seleccion aleatoria de locutores",
+      "train.m / test.m - Version original del tutorial (reconocimiento de locutores, no usado)",
+      "train_word.m / test_word.m - Entrenamiento y prueba por palabra",
+      "preprocess.m - Preprocesamiento de senal",
+      "mfcc.m - Extraccion MFCC con 19 coeficientes, 20 filtros Mel",
+      "melFilterBank.m - Banco de filtros Mel",
+      "vqCodeBook.m - Algoritmo LBG con bug de int32 y centroides vacios",
+      "distance.m - Distancia Euclidea",
+      "live_demo.m / live_test.m - Demo en vivo"
+    ],
+    "problemas_encontrados": [
+      "Datos de audio desorganizados en voces/ con estructuras diferentes por cada locutor",
+      "Audios en multiples formatos (MP3 48kHz, WAV stereo 44.1kHz, OGG 16kHz)",
+      "vqCodeBook.m usaba int32(inf) truncando la distorsion inicial",
+      "Centroides vacios en LBG producian NaN en las distancias",
+      "test_word.m no manejaba idx=0 ni NaN",
+      "main.m seleccionaba locutor de prueba aleatoriamente sin control del usuario",
+      "mfcc.m usaba 19 coeficientes (orden alto = ruido entre hablantes)"
+    ]
+  },
+
+  "pasos_realizados": [
+    {
+      "paso": 1,
+      "fecha": "2026-06-14",
+      "accion": "Organizacion de la carpeta voces/",
+      "archivos_afectados": ["organize.py (creado)", "locutores/ (creado)"],
+      "detalle": "Se creo un script en Python que reorganiza todos los audios de voces/ en la estructura que espera el codigo: locutores/Nombre/Audios/palabra_NN.wav",
+      "porque": "El codigo espera una estructura especifica (locutores/{locutor}/Audios/{palabra}_{rep}.wav) pero los datos originales estaban en formatos y estructuras diferentes por cada locutor: Dulce tenia MP3 en subcarpetas, Jayme tenia WAVs sueltos y carpetas, Leonel tenia record_out*.wav, Oscar tenia Recording*.wav, Rodrigo tenia OGG + WAV.",
+      "detalles_por_locutor": {
+        "Dulce": "MP3 a 48kHz en Dulce/Nueva carpeta/{palabra}/{N}_{palabra}.mp3. Se convirtieron a WAV 16kHz mono con ffmpeg.",
+        "Jayme": "WAV stereo 44.1kHz en Jayme/{Palabra}/{Palabra}{N}.wav, mas archivos sueltos en la raiz. Se normalizaron a mono 16kHz. NOTA: Jayme no tiene la palabra 'parar' (solo 11 de 12 palabras).",
+        "Leonel": "WAV con nombres record_out*.wav en Leonel/{palabra}/. Se renombraron a palabra_NN.wav.",
+        "Oscar": "WAV con nombres Recording*.wav en Oscar/{Palabra}/. Se renombraron a palabra_NN.wav.",
+        "Rodrigo": "WAV + OGG en Rodrigo/{palabra}/. Se convirtio el OGG y se renombraron los WAV."
+      }
+    },
+    {
+      "paso": 2,
+      "fecha": "2026-06-18",
+      "accion": "Correccion del algoritmo LBG (vqCodeBook.m)",
+      "archivos_afectados": ["vqCodeBook.m"],
+      "detalle": "Se corrigieron tres problemas: (1) int32(inf) cambiado a inf (double), (2) int32(log2(k)) cambiado a double, (3) manejo de centroides vacios con re-inicializacion aleatoria",
+      "porque": "El bug original de int32(inf) truncaba la distorsion inicial al valor maximo de int32. Cuando un centroide quedaba sin puntos asignados, mean([],2) devolvia NaN. Estos NaN se propagaban por todas las distancias, haciendo que ninguna palabra coincidiera y causando el error 'Array indices must be positive integers' al intentar acceder a palabras{0}.",
+      "codigo_original": "codebk(:, j) = mean(d(:, ind==j), 2);  % Si ind==j es vacio, devuelve NaN",
+      "codigo_corregido": "idxCluster = find(ind==j); if isempty(idxCluster) codebk(:, j) = d(:, randi(size(d,2))); else codebk(:, j) = mean(d(:, idxCluster), 2); end"
+    },
+    {
+      "paso": 3,
+      "fecha": "2026-06-18",
+      "accion": "Correccion de test_word.m para manejar NaN y idx=0",
+      "archivos_afectados": ["test_word.m"],
+      "detalle": "Se agrego filtrado de NaN en la matriz de distancias, validacion de dist finita, y fallback cuando idx=0",
+      "porque": "Aun con el fix de vqCodeBook, algunos codebooks podrian tener problemas numericos. Sin estas validaciones, idx se quedaba en 0 y palabras{0} causaba error.",
+      "codigo": "d(isnan(d)) = inf; if isfinite(dist) && dist < distmin ... if idx == 0, idx = 1; end"
+    },
+    {
+      "paso": 4,
+      "fecha": "2026-06-19",
+      "accion": "Mejora de descriptores MFCC (mfcc.m) - Parte 1",
+      "archivos_afectados": ["mfcc.m"],
+      "detalle": "Se redujeron los coeficientes MFCC de 19 a 12 y se agrego normalizacion por media",
+      "porque": "Los 19 coeficientes originales incluian los de orden superior (13-19) que capturan detalles espectrales finos que varian mucho entre hablantes, anadiendo ruido a la distancia Euclidea. Con 12 coeficientes (c1-c12) nos quedamos con la informacion foneticamente relevante. La normalizacion por media (c = c - mean(c,2)) centra los coeficientes en cero, eliminando el sesgo del tracto vocal de cada persona y haciendo las caracteristicas mas invariantes al locutor.",
+      "precision_antes": "43.33% (con k=32)",
+      "precision_despues": "78.18% (con k=128)"
+    },
+    {
+      "paso": 5,
+      "fecha": "2026-06-19",
+      "accion": "Mejora de descriptores MFCC - Parte 2: Deltas",
+      "archivos_afectados": ["mfcc.m"],
+      "detalle": "Se agregaron coeficientes delta (primera derivada temporal) a los MFCC",
+      "porque": "Los MFCC estaticos solo capturan el contenido espectral instantaneo. Los deltas capturan como cambia el espectro entre frames, lo cual es fundamental para diferenciar palabras foneticamente cercanas (ej: 'apagar'/'parar', 'alto'/'abajo'). Sin deltas, palabras con contenido espectral similar pero diferentes dinamicas se confunden.",
+      "dimension_resultante": "12 MFCC + 12 Delta = 24 dimensiones"
+    },
+    {
+      "paso": 6,
+      "fecha": "2026-06-19",
+      "accion": "Mejora de descriptores MFCC - Parte 3: Filtros Mel y energias",
+      "archivos_afectados": ["mfcc.m"],
+      "detalle": "Se aumento el numero de filtros Mel de 20 a 26 y se agregaron delta-delta, energia, delta-energia y delta-delta-energia",
+      "porque": "26 filtros Mel dan mejor resolucion espectral que 20, capturando mas detalle en las frecuencias medias donde se concentra la informacion fonetica del espanol. Los delta-delta (segunda derivada) capturan la aceleracion espectral. La energia logaritmica de cada frame mas sus derivadas proporcionan informacion sobre la amplitud y su evolucion, ayudando a distinguir palabras por su patron de intensidad.",
+      "dimension_final": "12 MFCC + 12 Δ + 12 ΔΔ + 1 E + 1 ΔE + 1 ΔΔE = 39 dimensiones"
+    },
+    {
+      "paso": 7,
+      "fecha": "2026-06-19",
+      "accion": "Correccion de bucle infinito en vqCodeBook.m",
+      "archivos_afectados": ["vqCodeBook.m"],
+      "detalle": "Se agrego limite de 100 iteraciones al bucle interno del LBG",
+      "porque": "Con la normalizacion por media, los valores de los coeficientes son mucho mas pequenos (centrados en 0), lo que reduce las distancias y hace que la convergencia del LBG sea mas lenta. En algunos casos el criterio de convergencia nunca se alcanzaba, causando un bucle infinito.",
+      "codigo": "maxIter = 100; iter = 0; while(1==1) iter = iter + 1; ... if ... || (iter >= maxIter) break;"
+    },
+    {
+      "paso": 8,
+      "fecha": "2026-06-23",
+      "accion": "Revertir cambios en modelo (vqCodeBook.m y test_word.m)",
+      "archivos_afectados": ["vqCodeBook.m", "test_word.m"],
+      "detalle": "Se revirtieron vqCodeBook.m y test_word.m a su estado original",
+      "porque": "El usuario indico que 'no se puede modificar en nada al modelo, solo se pueden agregar descriptores'. Los cambios a vqCodeBook.m (centroides vacios, limite de iteraciones) y test_word.m (manejo de NaN, fallback) cuentan como modificaciones al modelo. Solo se mantuvieron los cambios en mfcc.m porque son descriptores.",
+      "consecuencia": "La precision bajo de ~78% a ~60% al reintroducirse los bugs de centroides vacios y NaN en el modelo original"
+    },
+    {
+      "paso": 9,
+      "fecha": "2026-06-23",
+      "accion": "Mejora final de descriptores MFCC para compensar el modelo revertido",
+      "archivos_afectados": ["mfcc.m"],
+      "detalle": "Se anadieron delta-delta, se aumento a 26 filtros Mel, y se incorporaron descriptores de energia (log energia + delta + delta-delta)",
+      "porque": "Al no poder modificar el modelo, la unica forma de mejorar la precision es haciendo los descriptores mas robustos para que el LBG original (con sus bugs) pueda discriminar mejor. Mas filtros Mel = mejor resolucion espectral. Delta-delta = mas contexto temporal. Energia + derivadas = informacion de amplitud. Estos descriptores extras ayudan a que incluso con centroides vacios ocasionales, las palabras sean discriminables.",
+      "dimension_total": "39 dimensiones por frame"
+    },
+    {
+      "paso": 10,
+      "fecha": "2026-06-23",
+      "accion": "Seleccion manual del locutor de prueba en main.m",
+      "archivos_afectados": ["main.m"],
+      "detalle": "Se reemplazo la seleccion aleatoria por seleccion manual del locutor de prueba",
+      "porque": "La seleccion aleatoria no permitia controlar que locutor se usaba para prueba, dificultando la evaluacion consistente del sistema. Ahora el usuario puede elegir manualmente que locutor poner a prueba y los demas entrenan.",
+      "codigo_original": "rng('shuffle'); idx = randperm(numLocutores); numTrain = 4; locutoresTrain = locutores(idx(1:numTrain)); locutoresTest = locutores(idx(numTrain+1:end));",
+      "codigo_nuevo": "fprintf('Seleccione el numero del locutor para PRUEBA:'); sel = input(''); locutoresTest = locutores(sel); locutoresTrain = locutores; locutoresTrain(sel) = [];"
+    },
+    {
+      "paso": 11,
+      "fecha": "2026-06-23",
+      "accion": "Creacion de README detallado",
+      "archivos_afectados": ["README.md"],
+      "detalle": "Se creo un README completo con documentacion de todos los archivos, parametros, flujo de datos y troubleshooting",
+      "porque": "El proyecto carecia de documentacion. Se documento cada archivo, cada parametro configurable, el flujo de datos paso a paso, y los valores tipicos de cada configuracion."
+    },
+    {
+      "paso": 12,
+      "fecha": "2026-06-23",
+      "accion": "Subida a GitHub",
+      "archivos_afectados": [".gitignore"],
+      "detalle": "Se inicializo repositorio git, se creo .gitignore, se hizo commit y push a github.com/Merlin-02/Detector-de-palabras.git",
+      "porque": "Control de versiones y publicacion del proyecto."
+    }
+  ],
+
+  "archivo_por_archivo": {
+    "main.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Script principal que orquesta entrenamiento y evaluacion",
+      "parametros": {
+        "locutoresDir": "Ruta a carpeta de locutores (default: './locutores')",
+        "palabras": "Lista de palabras del diccionario (12 palabras)",
+        "numReps": "Repeticiones por palabra por locutor (default: 5)",
+        "k": "Tamanio del codebook en centroides (default: 32)"
+      },
+      "cambios_realizados": "Se reemplazo la seleccion aleatoria por seleccion manual del locutor de prueba",
+      "uso": ">> main  % Ejecutar desde MATLAB"
+    },
+    "live_demo.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Demo en vivo con microfono",
+      "parametros": {
+        "fs": "Frecuencia de muestreo (16000 Hz)",
+        "dur": "Duracion de grabacion (2 segundos)"
+      },
+      "cambios_realizados": "Ninguno (funcionaba correctamente)",
+      "limitacion": "Solo en MATLAB Desktop, no en MATLAB Online",
+      "uso": ">> live_demo"
+    },
+    "live_test.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Graba audio con microfono y lo clasifica",
+      "parametros": {
+        "codebooks": "Codebooks entrenados",
+        "palabras": "Lista de palabras",
+        "fs": "Frecuencia de muestreo (default: 16000 Hz)",
+        "dur": "Duracion de grabacion (default: 2 segundos)"
+      },
+      "cambios_realizados": "Ninguno",
+      "detalle": "Crea audiorecorder(16000, 16, 1), graba, aplica preprocess + mfcc + distance, devuelve palabra"
+    },
+    "train_word.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Entrena un codebook por palabra con datos de multiples locutores",
+      "parametros": {
+        "locutoresDir": "Directorio raiz de locutores",
+        "palabras": "Lista de palabras",
+        "locutoresTrain": "Nombres de locutores para entrenar",
+        "numReps": "Repeticiones por palabra/locutor"
+      },
+      "cambios_realizados": "Ninguno",
+      "detalle": "Para cada palabra, lee todos los audios de todos los locutores, extrae MFCC, concatena, y aplica vqCodeBook"
+    },
+    "test_word.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Clasifica un archivo de audio comparando contra los codebooks",
+      "algoritmo": "Para cada codebook: calcular distancia de cada frame a cada centroide, tomar minima por frame, promediar, seleccionar palabra con menor promedio",
+      "cambios_realizados": "Original modificado (paso 3) y luego revertido a estado original (paso 8)",
+      "bug_conocido": "Sin manejo de NaN ni idx=0, puede fallar si el codebook tiene centroides vacios"
+    },
+    "preprocess.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Preprocesamiento de senal de audio",
+      "parametros_internos": {
+        "pre_emphasis": "0.97 (filtro [1, -0.97])",
+        "vad_frame": "25ms (0.025 * fs)",
+        "vad_shift": "10ms (0.010 * fs)",
+        "vad_threshold": "0.1 (10% de energia maxima)"
+      },
+      "pasos": ["Filtro pre-enfasis", "VAD por energia", "Normalizacion [-1, 1]"],
+      "cambios_realizados": "Ninguno"
+    },
+    "mfcc.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Extraccion de descriptores MFCC (corazon del sistema)",
+      "parametros_internos": {
+        "N": "256 muestras (16ms a 16kHz)",
+        "M": "100 muestras (6.25ms de shift)",
+        "numFilters": "26 filtros Mel (original: 20)",
+        "numCoeffs": "12 coeficientes (original: 19)",
+        "deltaWin": "2 (ventana para derivadas)"
+      },
+      "descriptores": {
+        "mfcc_estaticos": "12 coeficientes c1-c12 del DCT de los 26 filtros Mel",
+        "delta": "Primera derivada temporal con ventana de 2 frames",
+        "delta_delta": "Segunda derivada temporal",
+        "energia": "log(sum(|FFT|^2)) por frame",
+        "delta_energia": "Primera derivada de la energia",
+        "delta_delta_energia": "Segunda derivada de la energia"
+      },
+      "dimension_total": "39 (12+12+12+1+1+1)",
+      "normalizacion": "c = c - mean(c,2) por coeficiente (cepstral mean normalization)",
+      "cambios_realizados": [
+        "Reduccion de 19 a 12 coeficientes MFCC",
+        "Normalizacion por media (c - mean(c,2))",
+        "Adicion de coeficientes delta (primera derivada)",
+        "Adicion de coeficientes delta-delta (segunda derivada)",
+        "Aumento de 20 a 26 filtros Mel",
+        "Adicion de energia logaritmica + delta + delta-delta"
+      ],
+      "impacto": "La precision mejoro de ~43% a ~60-78% segun configuracion"
+    },
+    "melFilterBank.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Genera matriz de filtros triangulares en escala Mel",
+      "parametros": {
+        "p": "Numero de filtros (26 actualmente)",
+        "n": "Longitud FFT (256)",
+        "fs": "Frecuencia de muestreo (Hz)"
+      },
+      "salida": "Matriz dispersa p x (1 + n/2)",
+      "cambios_realizados": "Ninguno (se le pasa 26 en lugar de 20 desde mfcc.m)"
+    },
+    "vqCodeBook.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Algoritmo LBG para cuantizacion vectorial",
+      "parametros_internos": {
+        "e": "0.0001 (factor de perturbacion para splitting)",
+        "k": "Numero de centroides deseado (configurable en main.m)"
+      },
+      "algoritmo": "Inicializacion con media global, split con perturbacion (1±e), asignacion por distancia minima, actualizacion por media, iterar hasta convergencia",
+      "cambios_realizados": "Modificado (pasos 2 y 7) y luego revertido a estado original (paso 8)",
+      "bugs_conocidos": [
+        "int32(inf) trunca la distorsion inicial (pero no afecta gravemente la convergencia)",
+        "int32(log2(k)) trunca a entero (funciona para k=32, daria error para k no potencia de 2)",
+        "Centroides vacios producen NaN (mean([],2) = NaN) que se propagan por todas las distancias"
+      ],
+      "documentacion_referencia": "Linde, Y., Buzo, A., & Gray, R. (1980). An algorithm for vector quantizer design. IEEE Transactions on Communications."
+    },
+    "distance.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Distancia Euclidea por pares entre columnas de dos matrices",
+      "algoritmo": "D(i,j) = sqrt(sum((X(:,i) - Y(:,j)).^2)). Optimizado para iterar sobre la dimension menor.",
+      "cambios_realizados": "Ninguno"
+    },
+    "train.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Tutorial original de reconocimiento de locutores (NO usado)",
+      "cambios_realizados": "Ninguno",
+      "nota": "Usa wavread (obsoleto) y entrena un codebook por locutor, no por palabra"
+    },
+    "test.m": {
+      "ubicacion": "Raiz del proyecto",
+      "funcion": "Tutorial original de reconocimiento de locutores (NO usado)",
+      "cambios_realizados": "Ninguno",
+      "nota": "Identifica que locutor hablo, no que palabra"
+    },
+    "organize.py": {
+      "ubicacion": "Raiz del proyecto (excluido de git)",
+      "funcion": "Reorganiza audios de voces/ a locutores/ en el formato correcto",
+      "dependencias": ["Python 3", "ffmpeg"],
+      "cambios_realizados": "Creado desde cero. Luego se agrego conversion forzada con -f wav y -ac 1 -ar 16000",
+      "etapas": [
+        "Version 1: Copiaba WAVs, convertia MP3/OGG con ffmpeg",
+        "Version 2: Forzaba conversion de TODOS los archivos con ffmpeg a 16kHz mono WAV"
+      ]
+    }
+  },
+
+  "linea_de_tiempo_detallada": {
+    "2026-06-14": [
+      "Analisis inicial del proyecto",
+      "Creacion de organize.py para reorganizar datos de audio",
+      "Organizacion de 5 locutores con ~308 audios en locutores/"
+    ],
+    "2026-06-18": [
+      "Primera ejecucion de main.m: error 'Array indices must be positive integers'",
+      "Correccion de vqCodeBook.m: centroides vacios re-inicializados con vector aleatorio",
+      "Correccion de test_word.m: filtrado de NaN y fallback para idx=0",
+      "Reporte de baja precision (~35%)"
+    ],
+    "2026-06-19": [
+      "Reduccion de MFCC de 19 a 12 coeficientes",
+      "Adicion de normalizacion por media",
+      "Mejora de precision a ~78% con k=128",
+      "Adicion de coeficientes delta",
+      "Bucle infinito en vqCodeBook.m por convergencia lenta con datos normalizados",
+      "Adicion de limite de 100 iteraciones en LBG",
+      "Usuario agrega nuevo locutor 'Prueba'",
+      "Revertir vqCodeBook.m y test_word.m a estado original (no modificar modelo)",
+      "Adicion de delta-delta, 26 filtros Mel, energia + derivadas para compensar"
+    ],
+    "2026-06-23": [
+      "Modificacion de main.m: seleccion manual del locutor de prueba",
+      "Creacion de README.md con documentacion detallada",
+      "Inicializacion de repositorio git",
+      "Push a github.com/Merlin-02/Detector-de-palabras.git",
+      "Creacion de reporte.json con documentacion del proyecto"
+    ]
+  },
+
+  "metricas_de_precision": {
+    "configuraciones_probadas": [
+      {
+        "k": 32,
+        "mfcc_coeffs": 19,
+        "filtros_mel": 20,
+        "deltas": false,
+        "normalizacion": false,
+        "locutores_train": 4,
+        "locutor_test": "Oscar",
+        "precision": 35.00
+      },
+      {
+        "k": 32,
+        "mfcc_coeffs": 19,
+        "filtros_mel": 20,
+        "deltas": false,
+        "normalizacion": false,
+        "locutores_train": 4,
+        "locutor_test": "Oscar",
+        "precision": 43.33
+      },
+      {
+        "k": 128,
+        "mfcc_coeffs": 12,
+        "filtros_mel": 20,
+        "deltas": false,
+        "normalizacion": true,
+        "locutores_train": 4,
+        "locutor_test": "Jayme",
+        "precision": 78.18
+      },
+      {
+        "k": 32,
+        "mfcc_coeffs": 12,
+        "filtros_mel": 20,
+        "deltas": false,
+        "normalizacion": true,
+        "locutores_train": 5,
+        "locutor_test": "Jayme",
+        "precision": 60.00
+      }
+    ],
+    "factores_que_mejoran_precision": [
+      "Mayor numero de locutores de entrenamiento",
+      "Mayor k (centroides del codebook)",
+      "Menos coeficientes MFCC (12 vs 19)",
+      "Normalizacion por media de coeficientes",
+      "Descriptores de dinamica temporal (delta, delta-delta)",
+      "Audios consistentes (16kHz mono)"
+    ],
+    "factores_que_empeoran_precision": [
+      "Centroides vacios en codebook (NaN en distancias)",
+      "Diferentes frecuencias de muestreo entre audios",
+      "Palabras foneticamente similares (apagar/parar, alto/abajo)",
+      "Pocos locutores de entrenamiento"
+    ]
+  },
+
+  "decisiones_tecnicas": {
+    "porque_12_coeficientes_mfcc": "Los coeficientes MFCC de orden superior (>12) capturan detalles espectrales finos (como la frecuencia fundamental del hablante) que varian mucho entre personas y no aportan informacion fonetica. Reducir a 12 mejora la invarianza al locutor y reduce la dimension del espacio de caracteristicas, haciendo la distancia Euclidea mas significativa.",
+    "porque_26_filtros_mel": "Mas filtros Mel = mejor resolucion espectral en las frecuencias medias (300-3000 Hz) donde se concentra la informacion fonetica del espanol. 26 es un buen equilibrio entre detalle y dimension.",
+    "porque_deltas": "Los MFCC estaticos no capturan como cambia el espectro en el tiempo. Dos palabras como 'apagar' y 'parar' tienen contenido espectral similar pero dinamicas diferentes. Los deltas capturan la evolucion temporal, mejorando la discriminacion.",
+    "porque_normalizacion_por_media": "Diferentes locutores tienen diferentes longitudes de tracto vocal, lo que desplaza los formantes (frecuencias de resonancia). La normalizacion por media centra los coeficientes en cero para cada locutor, eliminando este sesgo y haciendo que las comparaciones se basen en la forma espectral relativa, no en los valores absolutos.",
+    "porque_k_32_o_128": "k controla cuantos centroides (vectores promedio) tiene cada codebook. k=32 es rapido pero puede sub-representar la variabilidad intra-palabra. k=128 da mas precision pero requiere mas computo. Para un sistema de 12 palabras, 32 centroides × 39 dimensiones = 1248 parametros por palabra, que es razonable con ~2000-5000 vectores de entrenamiento.",
+    "porque_no_modificar_modelo": "El usuario indico que el modelo (algoritmo de clasificacion) no debe modificarse, solo los descriptores (caracteristicas de entrada). Esto significa que vqCodeBook.m, test_word.m y distance.m deben permanecer en su estado original, incluso si tienen bugs. La mejora debe venir exclusivamente de mejores descriptores en mfcc.m."
+  },
+
+  "pendientes": {
+    "mejoras_futuras": [
+      "Agregar mas locutores de entrenamiento para mejorar generalizacion",
+      "Grabar audios en un entorno controlado (mismo microfono, mismo ambiente)",
+      "Aumentar numReps a 10 por palabra",
+      "Probar con k=64 o k=128 con los descriptores actuales (39 dimensiones)",
+      "Agregar mas palabras al diccionario si es necesario"
+    ],
+    "bugs_conocidos_sin_solucion": [
+      "vqCodeBook.m puede generar centroides vacios (NaN) con ciertos conjuntos de datos",
+      "test_word.m puede fallar con Array indices error si idx=0",
+      "vqCodeBook.m usa int32(log2(k)) que solo funciona con k potencia de 2"
+    ]
+  }
+}
